@@ -1,9 +1,4 @@
 {
-  "renders": {
-    "api/index.py": {
-      "maxDuration": 30
-    }
-  },
   "rewrites": [
     {
       "source": "/(.*)",
