@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+.pytest_cache/
+.vercel/
+.DS_Store
+api/cookies.txt
