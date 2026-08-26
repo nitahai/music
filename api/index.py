@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 import yt_dlp
+import requests
 
 app = FastAPI(title="API Musik Pribadi Fajar (Vercel)", version="1.0")
 
@@ -18,104 +19,129 @@ def search_music(q: str, limit: int = 5):
     if not q:
         raise HTTPException(status_code=400, detail="Parameter query 'q' wajib diisi!")
         
-    target_query = f"ytsearch{limit}:{q}"
+    # Menggunakan Piped Public API untuk pencarian agar terhindar dari blokir bot datacenter Vercel
+    piped_instances = [
+        "https://pipedapi.kavin.rocks",
+        "https://piped-api.garudalinux.org",
+        "https://api.piped.privacy.com.de"
+    ]
     
-    ydl_opts = {
-        'extract_flat': False,
-        'skip_download': True,
-        'format': '140/bestaudio[protocol^=http]/bestaudio',
-    }
+    search_results = []
     
+    for instance in piped_instances:
+        try:
+            res = requests.get(f"{instance}/search?q={q}&filter=videos", timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                items = data.get("items", [])
+                if items:
+                    search_results = items[:limit]
+                    break
+        except Exception:
+            continue
+            
+    if not search_results:
+        # Fallback jika instance piped sibuk, gunakan yt-dlp standar
+        target_query = f"ytsearch{limit}:{q}"
+        ydl_opts = {'extract_flat': True, 'skip_download': True}
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(target_query, download=False)
+                search_results = info.get('entries', [])
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Gagal mencari musik: {str(e)}")
+
     detailed_song_list = []
     
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            search_results = ydl.extract_info(target_query, download=False)
-            entries = search_results.get('entries', [])
+    for idx, item in enumerate(search_results, 1):
+        # Handle format data dari Piped API maupun yt-dlp
+        if 'url' in item and '/watch?v=' in item['url']:
+            video_id = item['url'].split('v=')[-1].split('&')[0]
+            title = item.get('title', 'Unknown Title')
+            artist = item.get('uploaderName', 'Unknown Artist')
+            duration_sec = item.get('duration', 0)
             
-            for entry in entries:
-                title = entry.get('title', 'Unknown Title')
-                artist = entry.get('uploader', entry.get('channel', 'Unknown Artist'))
-                duration = entry.get('duration_string', 'N/A')
-                video_id = entry.get('id', '')
-                
-                stream_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else entry.get('url', '')
-                
-                thumbnails = entry.get('thumbnails', [])
-                cover_url = thumbnails[-1].get('url', '') if thumbnails else entry.get('thumbnail', '')
-                
-                # Cari direct audio link googlevideo
-                direct_audio_url = ""
-                formats = entry.get('formats', [])
-                for f in formats:
-                    if f.get('acodec') != 'none' and f.get('vcodec') == 'none':
-                        protocol = f.get('protocol', '')
-                        url = f.get('url', '')
-                        if 'http' in protocol and 'googlevideo.com' in url and 'm3u8' not in url:
-                            direct_audio_url = url
-                            break
-                
-                if not direct_audio_url and formats:
-                    for f in formats:
-                        if f.get('url') and 'googlevideo.com' in f.get('url') and 'm3u8' not in f.get('url'):
-                            direct_audio_url = f.get('url')
-                            break
-
-                song_info = {
-                    "judul": title,
-                    "artis": artist,
-                    "durasi": duration,
-                    "video_id": video_id,
-                    "link_streaming": stream_url,
-                    "link_cover": cover_url,
-                    "direct_audio_link": direct_audio_url if direct_audio_url else stream_url
-                }
-                
-                detailed_song_list.append(song_info)
-                
-        return {
-            "query": q,
-            "total_ditemukan": len(detailed_song_list),
-            "result": detailed_song_list
-        }
+            # Format durasi ke MM:SS
+            m, s = divmod(duration_sec, 60)
+            duration = f"{m}:{s:02d}"
+        else:
+            # Format jika dari yt-dlp fallback
+            video_id = item.get('id', '')
+            title = item.get('title', 'Unknown Title')
+            artist = item.get('uploader', item.get('channel', 'Unknown Artist'))
+            duration = item.get('duration_string', 'N/A')
+            
+        stream_url = f"https://www.youtube.com/watch?v={video_id}"
+        cover_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        song_info = {
+            "judul": title,
+            "artis": artist,
+            "durasi": duration,
+            "video_id": video_id,
+            "link_streaming": stream_url,
+            "link_cover": cover_url,
+            "direct_audio_link": f"/stream?url={stream_url}"
+        }
+        detailed_song_list.append(song_info)
+        
+    return {
+        "query": q,
+        "total_ditemukan": len(detailed_song_list),
+        "result": detailed_song_list
+    }
 
 @app.get("/stream")
 def get_stream(url: str):
     if not url:
         raise HTTPException(status_code=400, detail="Parameter 'url' wajib diisi!")
         
-    ydl_opts = {
-        'extract_flat': False,
-        'skip_download': True,
-        'format': '140/bestaudio[protocol^=http]/bestaudio',
-    }
+    # Ambil video ID dari URL
+    if "v=" in url:
+        video_id = url.split("v=")[-1].split("&")[0]
+    else:
+        raise HTTPException(status_code=400, detail="URL YouTube tidak valid!")
+        
+    piped_instances = [
+        "https://pipedapi.kavin.rocks",
+        "https://piped-api.garudalinux.org",
+        "https://api.piped.privacy.com.de"
+    ]
     
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            direct_audio_url = ""
-            formats = info.get('formats', [])
+    audio_link = ""
+    for instance in piped_instances:
+        try:
+            res = requests.get(f"{instance}/streams/{video_id}", timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                audio_streams = data.get("audioStreams", [])
+                # Cari stream berformat m4a atau googlevideo
+                best_audio = next((s for s in audio_streams if "audio/mp4" in s.get("mimeType", "") or "googlevideo.com" in s.get("url", "")), None)
+                if best_audio and best_audio.get("url"):
+                    audio_link = best_audio["url"]
+                    break
+        except Exception:
+            continue
             
-            for f in formats:
-                if f.get('acodec') != 'none' and f.get('vcodec') == 'none':
-                    protocol = f.get('protocol', '')
-                    stream_link = f.get('url', '')
-                    if 'http' in protocol and 'googlevideo.com' in stream_link and 'm3u8' not in stream_link:
-                        direct_audio_url = stream_link
-                        break
-                        
-            if not direct_audio_url and formats:
-                for f in formats:
-                    if f.get('url') and 'googlevideo.com' in f.get('url') and 'm3u8' not in f.get('url'):
-                        direct_audio_url = f.get('url')
-                        break
-                        
-            return {
-                "original_url": url,
-                "direct_audio_link": direct_audio_url if direct_audio_url else url
-            }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    if not audio_link:
+        # Fallback menggunakan Cobalt API
+        try:
+            cobalt_res = requests.post(
+                "https://api.cobalt.tools/api/json",
+                json={"url": url, "downloadMode": "audio", "audioFormat": "mp3"},
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                timeout=5
+            )
+            cobalt_data = cobalt_res.json()
+            if cobalt_data.get("url"):
+                audio_link = cobalt_data["url"]
+        except Exception:
+            pass
+            
+    if not audio_link:
+        raise HTTPException(status_code=500, detail="Gagal mendapatkan direct audio link karena pembatasan server YouTube.")
+        
+    return {
+        "original_url": url,
+        "direct_audio_link": audio_link
+    }
