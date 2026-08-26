@@ -29,8 +29,10 @@ app.add_middleware(
 def _to_netscape_cookiefile(source_path: Path) -> str:
     """Menerima cookies Netscape atau JSON hasil export ekstensi browser."""
     raw = source_path.read_text(encoding="utf-8-sig").strip()
+    target_path = Path("/tmp/youtube-cookies-netscape.txt")
     if raw.startswith("# Netscape HTTP Cookie File") or raw.startswith("# HTTP Cookie File"):
-        return str(source_path)
+        target_path.write_text(raw + "\n", encoding="utf-8")
+        return str(target_path)
 
     try:
         parsed = json.loads(raw)
@@ -42,7 +44,6 @@ def _to_netscape_cookiefile(source_path: Path) -> str:
             "api/cookies.txt harus berformat Netscape atau JSON cookies browser"
         ) from exc
 
-    target_path = Path("/tmp/youtube-cookies-netscape.txt")
     lines = ["# Netscape HTTP Cookie File", ""]
     for cookie in cookies:
         if not isinstance(cookie, dict):
@@ -56,11 +57,11 @@ def _to_netscape_cookiefile(source_path: Path) -> str:
         expires = int(cookie.get("expirationDate", cookie.get("expires", 0)) or 0)
         path = str(cookie.get("path", "/"))
         value = str(cookie.get("value", ""))
-        lines.append("\\t".join([domain, include_subdomains, path, secure, str(expires), name, value]))
+        lines.append("\t".join([domain, include_subdomains, path, secure, str(expires), name, value]))
 
     if len(lines) == 2:
         raise RuntimeError("api/cookies.txt tidak berisi cookie yang valid")
-    target_path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+    target_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return str(target_path)
 
 
