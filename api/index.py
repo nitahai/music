@@ -19,7 +19,6 @@ def search_music(q: str, limit: int = 5):
     if not q:
         raise HTTPException(status_code=400, detail="Parameter query 'q' wajib diisi!")
         
-    # Menggunakan Piped Public API untuk pencarian agar terhindar dari blokir bot datacenter Vercel
     piped_instances = [
         "https://pipedapi.kavin.rocks",
         "https://piped-api.garudalinux.org",
@@ -30,7 +29,7 @@ def search_music(q: str, limit: int = 5):
     
     for instance in piped_instances:
         try:
-            res = requests.get(f"{instance}/search?q={q}&filter=videos", timeout=5)
+            res = requests.get(f"{instance}/search?q={q}&filter=videos", timeout=4)
             if res.status_code == 200:
                 data = res.json()
                 items = data.get("items", [])
@@ -41,7 +40,6 @@ def search_music(q: str, limit: int = 5):
             continue
             
     if not search_results:
-        # Fallback jika instance piped sibuk, gunakan yt-dlp standar
         target_query = f"ytsearch{limit}:{q}"
         ydl_opts = {'extract_flat': True, 'skip_download': True}
         try:
@@ -53,22 +51,21 @@ def search_music(q: str, limit: int = 5):
 
     detailed_song_list = []
     
-    for idx, item in enumerate(search_results, 1):
-        # Handle format data dari Piped API maupun yt-dlp
+    for item in search_results:
         if 'url' in item and '/watch?v=' in item['url']:
             video_id = item['url'].split('v=')[-1].split('&')[0]
             title = item.get('title', 'Unknown Title')
-            artist = item.get('uploaderName', 'Unknown Artist')
+            artist = item.get('uploaderName', 'Tulus / Artis')
             duration_sec = item.get('duration', 0)
-            
-            # Format durasi ke MM:SS
-            m, s = divmod(duration_sec, 60)
-            duration = f"{m}:{s:02d}"
+            if duration_sec > 0:
+                m, s = divmod(duration_sec, 60)
+                duration = f"{m}:{s:02d}"
+            else:
+                duration = "N/A"
         else:
-            # Format jika dari yt-dlp fallback
             video_id = item.get('id', '')
             title = item.get('title', 'Unknown Title')
-            artist = item.get('uploader', item.get('channel', 'Unknown Artist'))
+            artist = item.get('uploader', item.get('channel', 'Tulus / Artis'))
             duration = item.get('duration_string', 'N/A')
             
         stream_url = f"https://www.youtube.com/watch?v={video_id}"
@@ -96,50 +93,50 @@ def get_stream(url: str):
     if not url:
         raise HTTPException(status_code=400, detail="Parameter 'url' wajib diisi!")
         
-    # Ambil video ID dari URL
     if "v=" in url:
         video_id = url.split("v=")[-1].split("&")[0]
     else:
         raise HTTPException(status_code=400, detail="URL YouTube tidak valid!")
         
-    piped_instances = [
-        "https://pipedapi.kavin.rocks",
-        "https://piped-api.garudalinux.org",
-        "https://api.piped.privacy.com.de"
-    ]
-    
     audio_link = ""
-    for instance in piped_instances:
-        try:
-            res = requests.get(f"{instance}/streams/{video_id}", timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                audio_streams = data.get("audioStreams", [])
-                # Cari stream berformat m4a atau googlevideo
-                best_audio = next((s for s in audio_streams if "audio/mp4" in s.get("mimeType", "") or "googlevideo.com" in s.get("url", "")), None)
-                if best_audio and best_audio.get("url"):
-                    audio_link = best_audio["url"]
-                    break
-        except Exception:
-            continue
-            
-    if not audio_link:
-        # Fallback menggunakan Cobalt API
-        try:
-            cobalt_res = requests.post(
-                "https://api.cobalt.tools/api/json",
-                json={"url": url, "downloadMode": "audio", "audioFormat": "mp3"},
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
-                timeout=5
-            )
+    
+    # METODE 1: Menggunakan Cobalt API (Sangat stabil untuk direct download/streaming link)
+    try:
+        cobalt_res = requests.post(
+            "https://api.cobalt.tools/api/json",
+            json={"url": url, "downloadMode": "audio", "audioFormat": "mp3"},
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            timeout=5
+        )
+        if cobalt_res.status_code == 200:
             cobalt_data = cobalt_res.json()
             if cobalt_data.get("url"):
                 audio_link = cobalt_data["url"]
-        except Exception:
-            pass
-            
+    except Exception:
+        pass
+        
+    # METODE 2: Fallback ke Piped API jika Cobalt sedang sibuk
     if not audio_link:
-        raise HTTPException(status_code=500, detail="Gagal mendapatkan direct audio link karena pembatasan server YouTube.")
+        piped_instances = [
+            "https://pipedapi.kavin.rocks",
+            "https://piped-api.garudalinux.org",
+            "https://api.piped.privacy.com.de"
+        ]
+        for instance in piped_instances:
+            try:
+                res = requests.get(f"{instance}/streams/{video_id}", timeout=4)
+                if res.status_code == 200:
+                    data = res.json()
+                    audio_streams = data.get("audioStreams", [])
+                    best_audio = next((s for s in audio_streams if s.get("url")), None)
+                    if best_audio and best_audio.get("url"):
+                        audio_link = best_audio["url"]
+                        break
+            except Exception:
+                continue
+                
+    if not audio_link:
+        raise HTTPException(status_code=500, detail="Gagal mendapatkan direct audio link. Silakan coba beberapa saat lagi.")
         
     return {
         "original_url": url,
