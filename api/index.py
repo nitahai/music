@@ -1,5 +1,8 @@
 """API pencarian musik berbasis YouTube dan yt-dlp untuk Vercel."""
 
+import base64
+import os
+from pathlib import Path
 from typing import Any
 
 import yt_dlp
@@ -22,6 +25,25 @@ app.add_middleware(
 )
 
 
+def _prepare_cookiefile() -> str | None:
+    """Membuat cookiefile sementara dari YOUTUBE_COOKIES_B64 jika disediakan."""
+    encoded_cookies = os.getenv("YOUTUBE_COOKIES_B64")
+    if encoded_cookies:
+        cookie_path = Path("/tmp/youtube-cookies.txt")
+        try:
+            cookie_path.write_bytes(base64.b64decode(encoded_cookies, validate=True))
+        except Exception as exc:
+            raise RuntimeError("YOUTUBE_COOKIES_B64 bukan Base64 yang valid") from exc
+        return str(cookie_path)
+
+    # Fallback khusus testing lokal. Jangan commit file ini ke repository.
+    local_cookie_path = Path(__file__).parent / "cookies.txt"
+    if local_cookie_path.exists():
+        return str(local_cookie_path)
+
+    return None
+
+
 def search_music(query: str, limit: int) -> list[dict[str, Any]]:
     """Menjalankan pencarian yt-dlp tanpa mengunduh file audio."""
     ydl_opts = {
@@ -32,6 +54,9 @@ def search_music(query: str, limit: int) -> list[dict[str, Any]]:
         "no_warnings": True,
         "noplaylist": True,
     }
+    cookiefile = _prepare_cookiefile()
+    if cookiefile:
+        ydl_opts["cookiefile"] = cookiefile
 
     results: list[dict[str, Any]] = []
     target_query = f"ytsearch{limit}:{query}"
@@ -124,4 +149,3 @@ def search_endpoint(
         "jumlah": len(results),
         "hasil": results,
     }
-
