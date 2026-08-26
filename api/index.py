@@ -67,6 +67,12 @@ def _to_netscape_cookiefile(source_path: Path) -> str:
 
 def _prepare_cookiefile() -> str | None:
     """Membuat cookiefile sementara dari env atau api/cookies.txt."""
+    raw_cookies = os.getenv("YOUTUBE_COOKIES")
+    if raw_cookies:
+        cookie_path = Path("/tmp/youtube-cookies-raw.txt")
+        cookie_path.write_text(raw_cookies, encoding="utf-8")
+        return _to_netscape_cookiefile(cookie_path)
+
     encoded_cookies = os.getenv("YOUTUBE_COOKIES_B64")
     if encoded_cookies:
         cookie_path = Path("/tmp/youtube-cookies.txt")
