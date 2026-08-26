@@ -1,6 +1,7 @@
 """API pencarian musik berbasis YouTube dan yt-dlp untuk Vercel."""
 
 import base64
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -25,8 +26,46 @@ app.add_middleware(
 )
 
 
+def _to_netscape_cookiefile(source_path: Path) -> str:
+    """Menerima cookies Netscape atau JSON hasil export ekstensi browser."""
+    raw = source_path.read_text(encoding="utf-8-sig").strip()
+    if raw.startswith("# Netscape HTTP Cookie File") or raw.startswith("# HTTP Cookie File"):
+        return str(source_path)
+
+    try:
+        parsed = json.loads(raw)
+        cookies = parsed.get("cookies", []) if isinstance(parsed, dict) else parsed
+        if not isinstance(cookies, list):
+            raise ValueError
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        raise RuntimeError(
+            "api/cookies.txt harus berformat Netscape atau JSON cookies browser"
+        ) from exc
+
+    target_path = Path("/tmp/youtube-cookies-netscape.txt")
+    lines = ["# Netscape HTTP Cookie File", ""]
+    for cookie in cookies:
+        if not isinstance(cookie, dict):
+            continue
+        domain = str(cookie.get("domain", ""))
+        name = str(cookie.get("name", ""))
+        if not domain or not name:
+            continue
+        include_subdomains = "TRUE" if domain.startswith(".") or not cookie.get("hostOnly", False) else "FALSE"
+        secure = "TRUE" if cookie.get("secure", False) else "FALSE"
+        expires = int(cookie.get("expirationDate", cookie.get("expires", 0)) or 0)
+        path = str(cookie.get("path", "/"))
+        value = str(cookie.get("value", ""))
+        lines.append("\\t".join([domain, include_subdomains, path, secure, str(expires), name, value]))
+
+    if len(lines) == 2:
+        raise RuntimeError("api/cookies.txt tidak berisi cookie yang valid")
+    target_path.write_text("\\n".join(lines) + "\\n", encoding="utf-8")
+    return str(target_path)
+
+
 def _prepare_cookiefile() -> str | None:
-    """Membuat cookiefile sementara dari YOUTUBE_COOKIES_B64 jika disediakan."""
+    """Membuat cookiefile sementara dari env atau api/cookies.txt."""
     encoded_cookies = os.getenv("YOUTUBE_COOKIES_B64")
     if encoded_cookies:
         cookie_path = Path("/tmp/youtube-cookies.txt")
@@ -34,12 +73,12 @@ def _prepare_cookiefile() -> str | None:
             cookie_path.write_bytes(base64.b64decode(encoded_cookies, validate=True))
         except Exception as exc:
             raise RuntimeError("YOUTUBE_COOKIES_B64 bukan Base64 yang valid") from exc
-        return str(cookie_path)
+        return _to_netscape_cookiefile(cookie_path)
 
-    # Fallback khusus testing lokal. Jangan commit file ini ke repository.
+    # Fallback khusus testing lokal/deployment private. Jangan gunakan produksi.
     local_cookie_path = Path(__file__).parent / "cookies.txt"
     if local_cookie_path.exists():
-        return str(local_cookie_path)
+        return _to_netscape_cookiefile(local_cookie_path)
 
     return None
 
